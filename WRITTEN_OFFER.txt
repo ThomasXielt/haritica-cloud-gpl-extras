@@ -1,0 +1,29 @@
+Written Offer of Source (GPL-3 §6)
+==================================
+
+The complete corresponding source code for the GPL-3 components in this
+Haritica cloud GPL-extras image (HISAT2, subread/featureCounts, leidenalg,
+louvain, igraph) is publicly available from the upstream maintainers at:
+
+    HISAT2:                  https://github.com/DaehwanKimLab/hisat2
+    subread/featureCounts:   https://sourceforge.net/projects/subread/
+    leidenalg:               https://github.com/vtraag/leidenalg
+    louvain:                 https://github.com/vtraag/louvain-igraph
+    igraph (python):         https://github.com/igraph/python-igraph
+
+The thin wrapper script that aggregates these tools (entrypoint.sh,
+run_alignment.py, run_clustering.py, Dockerfile) is published in the
+Haritica project source tree at:
+
+    https://github.com/ThomasXielt/haritica-cloud-gpl-extras
+
+at the tag matching this image's version (v1.0.0 initially) and the
+hisat2-v2.2.1 tag for the Windows binary archive. We will provide a copy
+of the source on physical media for a charge no more than the cost of
+distribution; contact licensing@haritica.com.
+
+This image is GPL-3.0-or-later as a whole (the aggregate work). The
+closed-source main Haritica image (haritica-{env}-api / -worker) does not
+incorporate this image at runtime; communication between the two stages
+happens exclusively via S3 (FSF "mere aggregation"). See
+docs/LICENSING-CLOUD.md in the main repo for the full architecture.
