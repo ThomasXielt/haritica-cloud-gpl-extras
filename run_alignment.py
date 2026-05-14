@@ -3,8 +3,33 @@
 Downloads FASTQ files (and the HISAT2 index + optional GTF) from S3,
 runs HISAT2 align, optionally runs featureCounts, then uploads the
 resulting BAM(s) (and counts.txt if generated) back to S3 under
-$HARITICA_GPL_OUTPUT_PREFIX. Writes a `_COMPLETE` marker LAST so
-stage 2 can wait on the marker without racing the upload.
+$HARITICA_GPL_OUTPUT_PREFIX. Writes a `manifest.json` (per-sample
+control/treatment grouping) then a `_COMPLETE` marker LAST so stage 2
+can wait on the marker without racing the upload.
+
+Input contract
+--------------
+- HARITICA_GPL_INPUT_KEYS (JSON array): flat list of every FASTQ S3 key
+  (all r1 + r2) — used purely for the bulk download.
+- HARITICA_GPL_TOOL_PARAMS (JSON object): tool params. When it carries a
+  non-empty "samples" list, alignment is driven off that list (the
+  writer is the single source of truth for control/treatment grouping):
+    {"paired": bool, "strandedness": "0"|"1"|"2"|null, "gtf_key": null,
+     "hisat2_index_key": "genomes/{genome_id}/{index_basename}",
+     "samples": [ {"sample_id": str, "group": "control"|"treatment",
+                   "r1_key": "<s3 key>", "r2_key": "<s3 key>"|null}, ...]}
+  Each sample's r1_key/r2_key are mapped to its downloaded local file by
+  basename — one BAM per sample, NO replicate merging. When "samples" is
+  absent/empty the legacy flat-list stem-inference path is used as a
+  back-compat fallback.
+
+Output contract
+---------------
+- {sample_id}.bam + {sample_id}.bam.bai for every sample.
+- manifest.json (JSON array): [{"sample_id", "group", "bam"}, ...] —
+  the stage-2 consumer assigns BAMs to control/treatment by `group`,
+  never by sort order.
+- _COMPLETE marker — written LAST, after the manifest.
 
 License: GPL-3.0-or-later (this wrapper aggregates GPL-3 binaries —
 HISAT2, subread/featureCounts — plus the SciPy stack). The wrapper
@@ -72,6 +97,31 @@ def _upload_dir(s3, dest_bucket: str, dest_prefix: str, source: Path) -> List[st
         s3.upload_file(str(path), dest_bucket, key)
         uploaded.append(key)
     return uploaded
+
+
+def _align_one(
+    index_prefix: str,
+    sample: str,
+    r1: Path,
+    r2: Path | None,
+    out_dir: Path,
+) -> Path:
+    """Align a single sample (paired if r2 is given, else single-end) with
+    HISAT2, sort + index, and return the {sample}.bam path. samtools index
+    produces the sibling {sample}.bam.bai."""
+    sam = out_dir / f"{sample}.sam"
+    bam = out_dir / f"{sample}.bam"
+    hisat2_cmd = ["hisat2", "-x", index_prefix]
+    if r2 is not None:
+        hisat2_cmd += ["-1", str(r1), "-2", str(r2)]
+    else:
+        hisat2_cmd += ["-U", str(r1)]
+    hisat2_cmd += ["-S", str(sam), "-p", "8"]
+    _run(hisat2_cmd)
+    _run(["samtools", "sort", "-@", "8", "-o", str(bam), str(sam)])
+    _run(["samtools", "index", str(bam)])
+    sam.unlink(missing_ok=True)
+    return bam
 
 
 def main() -> int:
@@ -144,41 +194,89 @@ def main() -> int:
         return 2
 
     # ----- Run HISAT2 -----
+    # `bam_paths` feeds the optional featureCounts call; `manifest_entries`
+    # records the control/treatment grouping for the stage-2 consumer.
     paired = bool(tool_params.get("paired", False))
     bam_paths: List[Path] = []
-    if paired:
-        # Pair adjacent files: [r1_a, r2_a, r1_b, r2_b, ...]
+    manifest_entries: List[dict] = []
+
+    samples = tool_params.get("samples") or []
+    if samples:
+        # ---- Preferred path: explicit `samples` array from the writer ----
+        # The writer is the single source of truth for control/treatment.
+        # Map each sample's r1_key/r2_key onto its downloaded local file by
+        # basename. One BAM per sample, NO replicate merging.
+        by_basename = {p.name: p for p in fastq_paths}
+
+        def _resolve(key: str | None) -> Path | None:
+            if not key:
+                return None
+            local = by_basename.get(Path(key).name)
+            if local is None:
+                # A wrong split = silently inverted DE results — fail loud.
+                print(
+                    f"[run_alignment] ERROR: FASTQ key {key!r} (basename "
+                    f"{Path(key).name!r}) was not among the downloaded inputs "
+                    f"{sorted(by_basename)}"
+                )
+                sys.exit(2)
+            return local
+
+        seen_ids: set[str] = set()
+        for entry in samples:
+            sample_id = str(entry.get("sample_id") or "").strip()
+            group = str(entry.get("group") or "").strip()
+            if not sample_id:
+                print(f"[run_alignment] ERROR: sample entry missing sample_id: {entry!r}")
+                return 2
+            if sample_id in seen_ids:
+                print(f"[run_alignment] ERROR: duplicate sample_id {sample_id!r}")
+                return 2
+            seen_ids.add(sample_id)
+            if group not in ("control", "treatment"):
+                print(
+                    f"[run_alignment] ERROR: sample {sample_id!r} has invalid group "
+                    f"{group!r} (expected 'control' or 'treatment')"
+                )
+                return 2
+            r1 = _resolve(entry.get("r1_key"))
+            if r1 is None:
+                print(f"[run_alignment] ERROR: sample {sample_id!r} has no r1_key")
+                return 2
+            # Single-end when r2_key is null/absent; paired otherwise.
+            r2 = _resolve(entry.get("r2_key")) if entry.get("r2_key") else None
+            print(
+                f"[run_alignment] aligning sample={sample_id} group={group} "
+                f"r1={r1.name}" + (f" r2={r2.name}" if r2 else " (single-end)")
+            )
+            bam = _align_one(index_prefix, sample_id, r1, r2, out_dir)
+            bam_paths.append(bam)
+            manifest_entries.append(
+                {"sample_id": sample_id, "group": group, "bam": bam.name}
+            )
+    elif paired:
+        # ---- Back-compat fallback: flat list, pair adjacent files ----
+        # [r1_a, r2_a, r1_b, r2_b, ...] — used only when `samples` is absent.
         if len(fastq_paths) % 2 != 0:
             print("[run_alignment] ERROR: paired=true but odd number of FASTQ inputs")
             return 2
         pairs = list(zip(fastq_paths[0::2], fastq_paths[1::2]))
         for r1, r2 in pairs:
             sample = r1.stem.replace(".fastq", "").replace(".fq", "")
-            sam = out_dir / f"{sample}.sam"
-            bam = out_dir / f"{sample}.bam"
-            _run([
-                "hisat2", "-x", index_prefix,
-                "-1", str(r1), "-2", str(r2),
-                "-S", str(sam), "-p", "8",
-            ])
-            _run(["samtools", "sort", "-@", "8", "-o", str(bam), str(sam)])
-            _run(["samtools", "index", str(bam)])
-            sam.unlink(missing_ok=True)
+            bam = _align_one(index_prefix, sample, r1, r2, out_dir)
             bam_paths.append(bam)
+            manifest_entries.append(
+                {"sample_id": sample, "group": "", "bam": bam.name}
+            )
     else:
+        # ---- Back-compat fallback: flat list, single-end ----
         for r1 in fastq_paths:
             sample = r1.stem.replace(".fastq", "").replace(".fq", "")
-            sam = out_dir / f"{sample}.sam"
-            bam = out_dir / f"{sample}.bam"
-            _run([
-                "hisat2", "-x", index_prefix,
-                "-U", str(r1),
-                "-S", str(sam), "-p", "8",
-            ])
-            _run(["samtools", "sort", "-@", "8", "-o", str(bam), str(sam)])
-            _run(["samtools", "index", str(bam)])
-            sam.unlink(missing_ok=True)
+            bam = _align_one(index_prefix, sample, r1, None, out_dir)
             bam_paths.append(bam)
+            manifest_entries.append(
+                {"sample_id": sample, "group": "", "bam": bam.name}
+            )
 
     # ----- Optional featureCounts -----
     gtf_key = tool_params.get("gtf_key")
@@ -201,11 +299,19 @@ def main() -> int:
         fc_cmd.extend(str(b) for b in bam_paths)
         _run(fc_cmd)
 
-    # ----- Upload outputs -----
+    # ----- Write manifest.json (BEFORE upload, so _upload_dir ships it) -----
+    # The stage-2 consumer reads this to assign BAMs to control/treatment by
+    # `group` — never by sort order. Lands at {out_prefix}/manifest.json.
+    manifest_local = out_dir / "manifest.json"
+    with open(manifest_local, "w") as f:
+        json.dump(manifest_entries, f, indent=2)
+    print(f"[run_alignment] wrote manifest.json with {len(manifest_entries)} sample(s)")
+
+    # ----- Upload outputs (BAMs, .bam.bai, manifest.json) -----
     uploaded = _upload_dir(s3, out_bucket, out_prefix, out_dir)
     print(f"[run_alignment] uploaded {len(uploaded)} output objects under s3://{out_bucket}/{out_prefix}")
 
-    # ----- Write _COMPLETE marker LAST -----
+    # ----- Write _COMPLETE marker LAST (the very last S3 write) -----
     marker_key = f"{out_prefix.rstrip('/')}/_COMPLETE"
     s3.put_object(Bucket=out_bucket, Key=marker_key, Body=b"")
     print(f"[run_alignment] wrote completion marker s3://{out_bucket}/{marker_key}")

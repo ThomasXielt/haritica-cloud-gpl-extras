@@ -2,25 +2,31 @@ Written Offer of Source (GPL-3 §6)
 ==================================
 
 The complete corresponding source code for the GPL-3 components in this
-Haritica cloud GPL-extras image (HISAT2, subread/featureCounts, leidenalg,
-louvain, igraph) is publicly available from the upstream maintainers at:
+Haritica cloud GPL-extras image is publicly available from the upstream
+maintainers at the exact versions shipped in this image:
 
-    HISAT2:                  https://github.com/DaehwanKimLab/hisat2
-    subread/featureCounts:   https://sourceforge.net/projects/subread/
+    HISAT2 v2.2.1:           https://github.com/DaehwanKimLab/hisat2
+    subread v2.0.6:          https://sourceforge.net/projects/subread/
     leidenalg:               https://github.com/vtraag/leidenalg
     louvain:                 https://github.com/vtraag/louvain-igraph
     igraph (python):         https://github.com/igraph/python-igraph
 
-The thin wrapper script that aggregates these tools (entrypoint.sh,
-run_alignment.py, run_clustering.py, Dockerfile) is published in the
+The thin wrapper scripts that aggregate these tools (entrypoint.sh,
+run_alignment.py, run_clustering.py, Dockerfile) are published in the
 Haritica project source tree at:
 
     https://github.com/ThomasXielt/haritica-cloud-gpl-extras
 
-at the tag matching this image's version (v1.0.0 initially) and the
-hisat2-v2.2.1 tag for the Windows binary archive. We will provide a copy
-of the source on physical media for a charge no more than the cost of
-distribution; contact licensing@haritica.com.
+at the tag matching this image's version (v1.0.1) and the hisat2-v2.2.1
+tag for the Windows binary archive.
+
+For at least three (3) years from the date this image was distributed,
+and for as long as Haritica offers support for this product, we will
+provide — to any third party who possesses this image — a complete
+machine-readable copy of the corresponding source code for the GPL-3
+components listed above, on a physical medium customarily used for
+software interchange, for a charge no more than the cost of physically
+performing the distribution. Contact licensing@haritica.com.
 
 This image is GPL-3.0-or-later as a whole (the aggregate work). The
 closed-source main Haritica image (haritica-{env}-api / -worker) does not

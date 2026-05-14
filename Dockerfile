@@ -7,17 +7,20 @@
 #   - leidenalg / louvain / igraph (GPL-3) — single-cell community detection
 #
 # RUNTIME POLICY: NO closed-source Haritica server code lives in this image.
-# Only the thin GPL-3 wrapper script (gpl-extras/entrypoint.sh) and standard
+# Only the thin GPL-3 wrapper script (entrypoint.sh) and standard
 # scientific Python libraries (numpy, pandas, anndata, scanpy) needed to run
 # the wrapper are present. Communication with stage-2 (the closed-source
 # main image, haritica-{env}-api) happens exclusively via S3 — FSF "mere
 # aggregation". See docs/LICENSING-CLOUD.md for the full architecture.
 #
-# This Dockerfile is also published to the public GPL-3 source repo at
+# This Dockerfile is published to the public GPL-3 source repo at
 # github.com/ThomasXielt/haritica-cloud-gpl-extras (FSF mere-aggregation
-# pattern; see WRITTEN_OFFER.txt). The CI build job for this image is
-# colocated with the main cloud-deploy workflow but produces an
-# independently-tagged ECR artifact (haritica-{env}-gpl-extras).
+# pattern; see WRITTEN_OFFER.txt). It is buildable standalone from this
+# repo root (flat layout). The main Haritica repo carries an identical
+# Dockerfile at gpl-extras/Dockerfile whose COPY lines are prefixed with
+# `gpl-extras/` because its build context is the main-repo root. The CI
+# build job for this image is colocated with the main cloud-deploy workflow
+# but produces an independently-tagged ECR artifact (haritica-{env}-gpl-extras).
 
 FROM python:3.11-slim
 
@@ -81,17 +84,17 @@ RUN pip install --no-cache-dir \
 # ---------------------------------------------------------------------------
 # Stage 3: Wrapper + license artifacts
 # ---------------------------------------------------------------------------
-COPY gpl-extras/entrypoint.sh /entrypoint.sh
-COPY gpl-extras/run_alignment.py /opt/gpl-wrapper/run_alignment.py
-COPY gpl-extras/run_clustering.py /opt/gpl-wrapper/run_clustering.py
-COPY gpl-extras/LICENSE /usr/share/haritica/LICENSE.notes
-COPY gpl-extras/WRITTEN_OFFER.txt /usr/share/haritica/WRITTEN_OFFER.txt
-# Bake the canonical GPL-3.0 text into the repo (gpl-extras/LICENSE.gpl-3.0.txt)
+COPY entrypoint.sh /entrypoint.sh
+COPY run_alignment.py /opt/gpl-wrapper/run_alignment.py
+COPY run_clustering.py /opt/gpl-wrapper/run_clustering.py
+COPY LICENSE /usr/share/haritica/LICENSE.notes
+COPY WRITTEN_OFFER.txt /usr/share/haritica/WRITTEN_OFFER.txt
+# Bake the canonical GPL-3.0 text into the repo (LICENSE.gpl-3.0.txt)
 # instead of curl-ing it at build time. The CI runner's network can be flaky
 # reaching www.gnu.org (observed: 133s timeouts in build-gpl-extras job).
 # The committed text matches https://www.gnu.org/licenses/gpl-3.0.txt verbatim
 # (35149 bytes, 674 lines, fetched 2026-05-03).
-COPY gpl-extras/LICENSE.gpl-3.0.txt /usr/share/haritica/LICENSE
+COPY LICENSE.gpl-3.0.txt /usr/share/haritica/LICENSE
 RUN chmod +x /entrypoint.sh
 
 # Default working dir matches what the BatchStack mounts via the `nvme` volume

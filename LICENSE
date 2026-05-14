@@ -1,24 +1,30 @@
-PLACEHOLDER — the canonical GPL-3.0-or-later license text is fetched at
-build time. The image's `/usr/share/haritica/LICENSE` will be the verbatim
-GPL-3.0 text from https://www.gnu.org/licenses/gpl-3.0.txt as inserted by
-the Dockerfile RUN that pulls the official text.
+Haritica cloud GPL-extras image — license notes
+================================================
 
-Until publication of the separate haritica-cloud-gpl-extras repo, the
-in-image LICENSE is sourced via this Dockerfile pattern — see Dockerfile.
+This image is GPL-3.0-or-later as a whole (the aggregate work).
 
-Aggregate license: GPL-3.0-or-later.
-GPL-3 components included:
-  - HISAT2                        (GPL-3.0-or-later)
-  - subread / featureCounts       (GPL-3.0-or-later)
-  - leidenalg                     (GPL-3.0-or-later)
-  - louvain (python-louvain)      (BSD; GPL-3 by aggregation)
-  - igraph (python bindings)      (GPL-2.0-or-later)
+The verbatim GPL-3.0 license text is the file LICENSE.gpl-3.0.txt in this
+directory; the Dockerfile COPYs it into the image at
+/usr/share/haritica/LICENSE.
 
-Permissively licensed deps in the same image:
-  - numpy, pandas, scipy          (BSD)
-  - anndata, scanpy               (BSD)
-  - boto3                         (Apache-2.0)
-  - awscli                        (Apache-2.0)
-  - samtools                      (MIT)
+GPL-3 components included in this image:
+  - HISAT2 v2.2.1                  (GPL-3.0-or-later)
+  - subread / featureCounts v2.0.6 (GPL-3.0-or-later)
+  - leidenalg                      (GPL-3.0-or-later)
+  - louvain (vtraag/louvain-igraph) (GPL-3.0-or-later)
+  - igraph (python bindings)       (GPL-2.0-or-later)
 
-See WRITTEN_OFFER.txt for source-access instructions per GPL-3 §6.
+Permissively-licensed dependencies in the same image:
+  - numpy, pandas, scipy           (BSD)
+  - anndata, scanpy                (BSD)
+  - boto3                          (Apache-2.0)
+  - awscli                         (Apache-2.0)
+  - samtools                       (MIT)
+
+The thin wrapper scripts that aggregate the GPL-3 tools (entrypoint.sh,
+run_alignment.py, run_clustering.py, Dockerfile) are Haritica-authored and
+GPL-3.0-or-later.
+
+See WRITTEN_OFFER.txt for source-access instructions per GPL-3 §6. The
+corresponding source is published at
+https://github.com/ThomasXielt/haritica-cloud-gpl-extras

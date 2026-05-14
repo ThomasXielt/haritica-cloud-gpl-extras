@@ -39,6 +39,10 @@ def _parse_s3_uri(uri: str) -> Tuple[str, str]:
 
 
 def main() -> int:
+    # NOTE: the sc-compute h5ad lives in S3_RESULTS_BUCKET, so the writer
+    # (batch_submitter._plan_pipeline) overrides the S3_INPUT_BUCKET env var
+    # forwarded to this stage to point at S3_RESULTS_BUCKET's value. From the
+    # runner's POV it is still just "the bucket the h5ad input is in".
     input_bucket = _env("S3_INPUT_BUCKET", required=True)
     output_prefix_uri = _env("HARITICA_GPL_OUTPUT_PREFIX", required=True)
     input_keys = json.loads(_env("HARITICA_GPL_INPUT_KEYS", "[]"))
