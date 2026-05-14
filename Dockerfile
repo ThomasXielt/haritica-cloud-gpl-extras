@@ -40,12 +40,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 # HISAT2 v2.2.1 (GPL-3) — RNA-seq aligner
 #
-# Source: upstream binary distribution from the HISAT2 BioHPC mirror
-# (https://daehwankimlab.github.io/hisat2/download/). The s3 URL the desktop
-# installer resolves (genome-idx.s3.amazonaws.com/hisat/...) returns 404 on
-# Linux x86_64; the swmed BioHPC link is the canonical upstream alternative.
+# Source: mirrored into this project's own GitHub release
+# (github.com/ThomasXielt/haritica-cloud-gpl-extras, hisat2-v2.2.1 release).
+# Upstream HISAT2 is distributed via a cloud.biohpc.swmed.edu Nextcloud
+# file-share (genome-idx.s3.amazonaws.com 404s on Linux x86_64); mirroring
+# it onto a GitHub release removes that fragile build-time dependency.
 # ---------------------------------------------------------------------------
-RUN curl -fsSL "https://cloud.biohpc.swmed.edu/index.php/s/oTtGWbWjaxsQ2Ho/download" \
+RUN curl -fsSL "https://github.com/ThomasXielt/haritica-cloud-gpl-extras/releases/download/hisat2-v2.2.1/hisat2-2.2.1-Linux_x86_64.zip" \
       -o /tmp/hisat2.zip \
     && unzip -q /tmp/hisat2.zip -d /opt/ \
     && ln -sf /opt/hisat2-2.2.1/hisat2 /usr/local/bin/hisat2 \
