@@ -124,7 +124,84 @@ def _align_one(
     return bam
 
 
+def _install_scoped_session() -> None:
+    """Re-assume the inner BatchJobBaseRole with the haritica-user-id session
+    tag so per-user-tag-conditioned S3 reads work.
+
+    The Batch container starts running as the OUTER BatchJobBaseRole, whose
+    inline policy grants ONLY `sts:AssumeRole` + `sts:TagSession` on the inner
+    `haritica-{env}-batch-job-base` role — it has no direct S3 permissions.
+    The inner role holds the actual S3 grants, scoped by the haritica-user-id
+    session tag (per-user prefix isolation in S3 bucket policies). Without this
+    assume-role-with-tag dance, every S3 call from inside the GPL stage fails
+    with 403 Forbidden.
+
+    Mirrors what the closed-source main worker's
+    server/aws_creds.install_scoped_default_session() does — inline here so
+    this GPL-3 wrapper doesn't import any closed-source code (the
+    closed-source / GPL-3 isolation boundary is via S3, not Python imports).
+
+    Required env vars (all set by server/batch_submitter._plan_pipeline at
+    submission time):
+      BATCH_JOB_BASE_ROLE_ARN — the inner role to assume (has S3 perms)
+      HARITICA_USER_ID        — the haritica-user-id session tag value
+      HARITICA_JOB_ID         — used to build a unique RoleSessionName
+
+    No-op when those env vars are unset (e.g. local debugging) — the default
+    credential chain handles that case.
+    """
+    role_arn = os.environ.get("BATCH_JOB_BASE_ROLE_ARN", "")
+    user_id = os.environ.get("HARITICA_USER_ID", "")
+    job_id = os.environ.get("HARITICA_JOB_ID", "unknown")
+    if not (role_arn and user_id):
+        print(
+            "[run_alignment] BATCH_JOB_BASE_ROLE_ARN or HARITICA_USER_ID "
+            "unset — using default credential chain",
+            flush=True,
+        )
+        return
+
+    import botocore.session
+    from botocore.credentials import RefreshableCredentials
+
+    session_name = f"haritica-job-{job_id[:32]}"
+
+    def _refresh() -> dict:
+        # Bare boto3 client here, NOT the default session — avoids infinite
+        # recursion if anything in the default session ever calls back into us
+        # during refresh.
+        sts = boto3.Session().client("sts")
+        resp = sts.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName=session_name,
+            Tags=[{"Key": "haritica-user-id", "Value": user_id}],
+            DurationSeconds=3600,  # role-chaining cap; refresh handles the rest
+        )
+        c = resp["Credentials"]
+        return {
+            "access_key": c["AccessKeyId"],
+            "secret_key": c["SecretAccessKey"],
+            "token": c["SessionToken"],
+            "expiry_time": c["Expiration"].isoformat(),
+        }
+
+    creds = RefreshableCredentials.create_from_metadata(
+        metadata=_refresh(),
+        refresh_using=_refresh,
+        method="sts-assume-role",
+    )
+    botocore_session = botocore.session.get_session()
+    botocore_session._credentials = creds
+    boto3.DEFAULT_SESSION = boto3.Session(botocore_session=botocore_session)
+    print(
+        f"[run_alignment] installed scoped credentials "
+        f"(user={user_id[:8]}..., session={session_name})",
+        flush=True,
+    )
+
+
 def main() -> int:
+    _install_scoped_session()
     input_bucket = _env("S3_INPUT_BUCKET", required=True)
     references_bucket = _env("S3_REFERENCES_BUCKET")
     results_bucket = _env("S3_RESULTS_BUCKET", required=True)
