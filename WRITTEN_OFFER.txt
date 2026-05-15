@@ -17,10 +17,14 @@ Haritica project source tree at:
 
     https://github.com/ThomasXielt/haritica-cloud-gpl-extras
 
-at the tag matching this image's version (v1.0.2) and the hisat2-v2.2.1
-tag for the Windows binary archive. Every cloud deployment of this image
-is pinned to a specific tag in `infra/config/environments.ts` and the
-mirror-repo tag with that name carries the exact source used to build it.
+at the annotated git tag whose name matches the ECR image tag this
+container was built from (e.g. `v1.0.2`), and the `hisat2-v2.2.1` tag
+for the Windows binary archive. Every cloud deployment of this image
+is pinned to a specific tag in `infra/config/environments.ts`, and the
+mirror-repo tag with that same name carries the exact source used to
+build it. To find the version of the image you have, run
+`docker inspect <image>` and read the tag, then check out that tag in
+the mirror repo.
 
 For at least three (3) years from the date this image was distributed,
 and for as long as Haritica offers support for this product, we will
