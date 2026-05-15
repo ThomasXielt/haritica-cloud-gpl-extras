@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """GPL Stage-1 Alignment Wrapper
 
 Downloads FASTQ files (and the HISAT2 index + optional GTF) from S3,
