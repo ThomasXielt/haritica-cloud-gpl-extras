@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """GPL Stage-1 Clustering Wrapper
 
 Downloads an h5ad from S3, runs Leiden or Louvain community detection,
