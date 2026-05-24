@@ -119,7 +119,25 @@ def _align_one(
         hisat2_cmd += ["-U", str(r1)]
     hisat2_cmd += ["-S", str(sam), "-p", "8"]
     _run(hisat2_cmd)
-    _run(["samtools", "sort", "-@", "8", "-o", str(bam), str(sam)])
+    # CLOUD-GPL-SAMTOOLS-SORT-CLEANUP-0001: pin samtools' temp prefix to the
+    # NVMe scratch dir, and cap per-thread memory. The default temp prefix
+    # points at /tmp (small container overlay FS), which fills under
+    # concurrent jobs and triggers a bare "exit 1" on the second sample —
+    # blocking every multi-sample FASTQ+HISAT2 cloud submit across
+    # DE/WGCNA/Enrichment/GSEA/MMAPPR/Variant-Annotation that lands on a
+    # shared Batch node. -m 1G keeps the 8-thread peak under 8 GB so the
+    # NVMe headroom stays comfortable; -T puts both the sort output and
+    # the spill files on the same volume. Cleanup is unchanged (the SAM is
+    # unlinked after the index step).
+    sort_tmp_prefix = str(out_dir / f"{sample}.sort.tmp")
+    _run([
+        "samtools", "sort",
+        "-@", "8",
+        "-m", "1G",
+        "-T", sort_tmp_prefix,
+        "-o", str(bam),
+        str(sam),
+    ])
     _run(["samtools", "index", str(bam)])
     sam.unlink(missing_ok=True)
     return bam
