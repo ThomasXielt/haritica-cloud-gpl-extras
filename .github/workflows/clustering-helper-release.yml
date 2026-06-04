@@ -41,25 +41,51 @@ jobs:
         include:
           - os: windows-latest
             asset: haritica-clustering-helper-x86_64-pc-windows-msvc
-          - os: macos-13            # Intel x86_64
-            asset: haritica-clustering-helper-x86_64-apple-darwin
           - os: macos-14            # Apple Silicon arm64 (native)
             asset: haritica-clustering-helper-aarch64-apple-darwin
+          - os: macos-14            # x86_64 cross-built under Rosetta 2
+            asset: haritica-clustering-helper-x86_64-apple-darwin
+            x86_darwin: true
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: clustering-helper
     steps:
       - uses: actions/checkout@v4
+      # Native CPython for Windows + macOS arm64.
       - uses: actions/setup-python@v5
+        if: ${{ ! matrix.x86_darwin }}
         with:
           python-version: "3.11"
+      - name: Select native python
+        if: ${{ ! matrix.x86_darwin }}
+        shell: bash
+        run: echo "PYBIN=python" >> "$GITHUB_ENV"
+      # GitHub's macos-13 (Intel) runners are deprecated and queue for hours, so
+      # the x86_64 macOS binary is cross-built on the always-available macos-14
+      # (arm64) runner: a standalone x86_64 CPython runs under Rosetta 2, so
+      # PyInstaller emits an x86_64 Mach-O. (Validated locally on Apple Silicon.)
+      - name: Set up x86_64 Python via Rosetta 2
+        if: ${{ matrix.x86_darwin }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          URL="https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15%2B20260602-x86_64-apple-darwin-install_only.tar.gz"
+          curl -fsSL "$URL" -o /tmp/py-x86.tar.gz
+          tar xzf /tmp/py-x86.tar.gz -C /tmp
+          PYBIN=/tmp/python/bin/python3.11
+          "$PYBIN" -c "import platform; assert platform.machine()=='x86_64', platform.machine(); print('x86_64 python OK')"
+          echo "PYBIN=$PYBIN" >> "$GITHUB_ENV"
       - name: Install deps
-        run: python -m pip install -r requirements.txt pyinstaller
+        shell: bash
+        run: $PYBIN -m pip install -r requirements.txt pyinstaller
       - name: Smoke-import deps (catches stale requirements.txt before the build)
-        run: python -c "import anndata, igraph, leidenalg, louvain, numpy, scipy, sklearn.neighbors, h5py; print('deps ok')"
+        shell: bash
+        run: $PYBIN -c "import anndata, igraph, leidenalg, louvain, numpy, scipy, sklearn.neighbors, h5py, pkg_resources; print('deps ok')"
       - name: Build (onedir)
-        run: pyinstaller --clean pyinstaller.spec --noconfirm
+        shell: bash
+        run: $PYBIN -m PyInstaller --clean pyinstaller.spec --noconfirm
       - name: Assert bundle layout
         shell: bash
         run: |
