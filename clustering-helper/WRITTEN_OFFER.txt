@@ -1,0 +1,36 @@
+Written Offer of Source (GPL-3 §6)
+==================================
+
+The complete corresponding source code for this binary distribution of
+haritica-clustering-helper is publicly available at:
+
+    https://github.com/ThomasXielt/haritica-cloud-gpl-extras
+
+in the `clustering-helper/` directory, at the annotated git tag whose name
+matches this binary's version (e.g. the binary that prints version X.Y.Z via
+`--version` corresponds to the tag `clustering-helper-vX.Y.Z`). The source at
+that tag is the exact source from which this binary was built.
+
+For at least three (3) years from the date this binary was distributed, and
+for as long as Haritica offers support for this product, we will provide — to
+any third party who possesses this binary — a complete machine-readable copy
+of the corresponding source code for the GPL-3 components below, on a physical
+medium customarily used for software interchange, for a charge no more than
+the cost of physically performing the distribution. Contact
+licensing@haritica.com.
+
+This binary aggregates the following GPL-licensed community-detection
+libraries:
+
+    leidenalg            (GPL-3.0-or-later)   https://github.com/vtraag/leidenalg
+    louvain              (GPL-3.0-or-later)   https://github.com/vtraag/louvain-igraph
+    igraph (python)      (GPL-2.0-or-later)   https://github.com/igraph/python-igraph
+
+together with the permissively-licensed libraries anndata, scikit-learn, h5py,
+numpy, pandas, and scipy (each distributed under its own BSD-family license).
+The aggregate work — including the Haritica-authored helper.py wrapper — is
+GPL-3.0-or-later. The verbatim license text accompanies this binary as LICENSE.
+
+Haritica's closed-source main application does not incorporate this binary at
+runtime; it invokes it as a separate process and communicates via temporary
+files (FSF "mere aggregation").

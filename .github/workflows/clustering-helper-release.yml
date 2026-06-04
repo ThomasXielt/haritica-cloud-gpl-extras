@@ -1,0 +1,195 @@
+name: Build & Release clustering-helper
+
+# Source for this workflow lives in the Haritica monorepo at
+# helper-repo/.github/workflows/release.yml; this is the public-repo copy,
+# adapted to build from the clustering-helper/ subdirectory (the repo root
+# also hosts the cloud gpl-extras image, so the helper sources are kept in
+# their own subdir). Triggered by `clustering-helper-vMAJOR.MINOR.PATCH` tags;
+# the Haritica desktop installer pins the exact tag in
+# analyses/optional_tools.py::_CLUSTERING_HELPER_TAG.
+on:
+  push:
+    tags: ["clustering-helper-v*.*.*"]
+  workflow_dispatch: {}
+
+jobs:
+  pre-release-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clustering-helper
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject placeholder LICENSE (GPL-3 §6 — binary must ship real license)
+        run: |
+          if grep -q PLACEHOLDER LICENSE; then
+            echo "LICENSE still contains placeholder text. Run scripts/fetch-license.sh before tagging."
+            exit 1
+          fi
+
+  build-native:
+    needs: pre-release-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: haritica-clustering-helper-x86_64-pc-windows-msvc
+          - os: macos-13            # Intel x86_64
+            asset: haritica-clustering-helper-x86_64-apple-darwin
+          - os: macos-14            # Apple Silicon arm64 (native)
+            asset: haritica-clustering-helper-aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: clustering-helper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Smoke-import deps (catches stale requirements.txt before the build)
+        run: python -c "import anndata, igraph, leidenalg, louvain, numpy, scipy, sklearn.neighbors, h5py; print('deps ok')"
+      - name: Build (onedir)
+        run: pyinstaller --clean pyinstaller.spec --noconfirm
+      - name: Assert bundle layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=dist/haritica-clustering-helper
+          test -d "$B" || { echo "missing $B"; ls -R dist; exit 1; }
+          test -d "$B/_internal" || { echo "missing _internal/"; exit 1; }
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            test -f "$B/haritica-clustering-helper.exe" || { echo "missing launcher .exe"; exit 1; }
+          else
+            test -f "$B/haritica-clustering-helper" || { echo "missing launcher"; exit 1; }
+          fi
+      - name: Verify macOS ad-hoc signature + linkage (mandatory on Apple Silicon)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          L=dist/haritica-clustering-helper/haritica-clustering-helper
+          codesign --verify --deep --verbose=2 "$L"
+          otool -L "$L" | head -20
+          "$L" --version
+      - name: Smoke --version (Windows)
+        if: runner.os == 'Windows'
+        run: dist\haritica-clustering-helper\haritica-clustering-helper.exe --version
+      - name: Package onedir bundle (contents at ZIP ROOT)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          B=dist/haritica-clustering-helper
+          ZIP="out/${{ matrix.asset }}.zip"
+          # The installer (optional_tools.download_tool) extracts the zip and
+          # expects the launcher AND _internal/ at the ZIP ROOT — it relocates
+          # only the launcher file, never a nested _internal/. So the archive
+          # must be rooted at the bundle CONTENTS, not the parent dir.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # ditto WITHOUT --keepParent roots the archive at the dir contents
+            # and preserves Mach-O bytes (the ad-hoc signature) + symlinks.
+            ditto -c -k "$B" "$ZIP"
+          else
+            # Windows: python zipfile rooted at the bundle contents. Avoids
+            # git-bash/PowerShell path-translation quirks; exec bits + symlinks
+            # don't matter on Windows, and download_tool re-applies +x on POSIX.
+            python - "$B" "$ZIP" <<'PY'
+          import os, sys, zipfile
+          bundle, zippath = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED) as zf:
+              for root, _dirs, files in os.walk(bundle):
+                  for fn in files:
+                      full = os.path.join(root, fn)
+                      zf.write(full, os.path.relpath(full, bundle))  # contents at root
+          print("wrote", zippath)
+          PY
+          fi
+      - name: Verify zip is rooted at bundle contents (NOT nested)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "out/${{ matrix.asset }}.zip" <<'PY'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          tops = sorted({n.split('/')[0] for n in names if n})
+          launcher = "haritica-clustering-helper.exe" if any(n.endswith(".exe") for n in names) else "haritica-clustering-helper"
+          assert launcher in names, f"launcher {launcher!r} not at zip root; top entries: {tops[:12]}"
+          assert any(n == "_internal/" or n.startswith("_internal/") for n in names), f"_internal/ not at zip root; top entries: {tops[:12]}"
+          print("zip root OK:", launcher, "+ _internal/")
+          PY
+      - name: SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="out/${{ matrix.asset }}.zip"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "$ZIP" SHA256 | sed -n '2p' | tr -d ' \r' > "$ZIP.sha256"
+          else
+            shasum -a 256 "$ZIP" | cut -d' ' -f1 > "$ZIP.sha256"
+          fi
+          cat "$ZIP.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            clustering-helper/out/${{ matrix.asset }}.zip
+            clustering-helper/out/${{ matrix.asset }}.zip.sha256
+            clustering-helper/WRITTEN_OFFER.txt
+            clustering-helper/LICENSE
+
+  build-linux:
+    needs: pre-release-checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clustering-helper
+    env:
+      ASSET: haritica-clustering-helper-x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build onedir in manylinux2014 (glibc 2.17 floor for max compat)
+        run: |
+          set -euo pipefail
+          docker run --rm -e ASSET -v "$PWD":/io -w /io quay.io/pypa/manylinux2014_x86_64 bash -c '
+            set -euo pipefail
+            yum install -y zip >/dev/null
+            PY=/opt/python/cp311-cp311/bin/python
+            "$PY" -m pip install --upgrade pip
+            "$PY" -m pip install -r requirements.txt pyinstaller
+            "$PY" -c "import anndata, igraph, leidenalg, louvain, numpy, scipy, sklearn.neighbors, h5py; print(\"deps ok\")"
+            "$PY" -m PyInstaller --clean pyinstaller.spec --noconfirm
+            B=dist/haritica-clustering-helper
+            test -f "$B/haritica-clustering-helper"
+            test -d "$B/_internal"
+            "$B/haritica-clustering-helper" --version
+            mkdir -p out
+            ( cd "$B" && zip -r -y "/io/out/$ASSET.zip" . )
+          '
+      - name: Verify zip is rooted at bundle contents (NOT nested)
+        run: |
+          set -euo pipefail
+          python3 - "out/$ASSET.zip" <<'PY'
+          import os, sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          tops = sorted({n.split('/')[0] for n in names if n})
+          assert "haritica-clustering-helper" in names, f"launcher not at zip root; top entries: {tops[:12]}"
+          assert any(n == "_internal/" or n.startswith("_internal/") for n in names), f"_internal/ not at zip root; top entries: {tops[:12]}"
+          print("zip root OK")
+          PY
+      - name: SHA256
+        run: |
+          set -euo pipefail
+          ZIP="out/$ASSET.zip"
+          sha256sum "$ZIP" | cut -d' ' -f1 > "$ZIP.sha256"
+          cat "$ZIP.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            clustering-helper/out/${{ env.ASSET }}.zip
+            clustering-helper/out/${{ env.ASSET }}.zip.sha256
+            clustering-helper/WRITTEN_OFFER.txt
+            clustering-helper/LICENSE

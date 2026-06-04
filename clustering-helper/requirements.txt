@@ -1,0 +1,15 @@
+# Runtime deps for haritica-clustering-helper (GPL-3 aggregate).
+# Must match helper.py's actual imports — v1.0.2 dropped scanpy/numba/llvmlite
+# in favor of sklearn.neighbors + leidenalg/louvain directly (see helper.py
+# and pyinstaller.spec excludes). scikit-learn and h5py are listed explicitly
+# (not just pulled transitively) so a clean CI runner builds deterministically:
+# helper.py imports sklearn.neighbors, and anndata.read_h5ad needs h5py.
+anndata==0.10.*
+h5py>=3.10
+scikit-learn>=1.3
+leidenalg==0.10.*
+louvain==0.8.*
+igraph==0.11.*
+numpy<2.0
+pandas==2.*
+scipy>=1.10
