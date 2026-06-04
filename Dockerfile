@@ -88,6 +88,7 @@ RUN pip install --no-cache-dir \
 COPY entrypoint.sh /entrypoint.sh
 COPY run_alignment.py /opt/gpl-wrapper/run_alignment.py
 COPY run_clustering.py /opt/gpl-wrapper/run_clustering.py
+COPY run_genome_build.py /opt/gpl-wrapper/run_genome_build.py
 COPY LICENSE /usr/share/haritica/LICENSE.notes
 COPY WRITTEN_OFFER.txt /usr/share/haritica/WRITTEN_OFFER.txt
 # Bake the canonical GPL-3.0 text into the repo (LICENSE.gpl-3.0.txt)
