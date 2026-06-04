@@ -12,6 +12,12 @@ on:
     tags: ["clustering-helper-v*.*.*"]
   workflow_dispatch: {}
 
+# action-gh-release creates a Release, which needs contents:write. The default
+# GITHUB_TOKEN is read-only on many repos, so this must be explicit (otherwise
+# the upload fails with 403 "Resource not accessible by integration").
+permissions:
+  contents: write
+
 jobs:
   pre-release-checks:
     runs-on: ubuntu-latest
