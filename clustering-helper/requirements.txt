@@ -22,3 +22,10 @@ pandas==2.2.3
 leidenalg==0.10.2
 louvain==0.8.2
 igraph==0.11.6
+# louvain/__init__.py imports `pkg_resources` at load time. pkg_resources was
+# REMOVED in setuptools 81.0 (2025-07), and the minimal manylinux2014 cp311
+# Python ships no setuptools at all — so the build (and the bundled binary's
+# `import louvain`) needs an older setuptools that still provides pkg_resources.
+# GitHub's setup-python already bundles a <81 setuptools (why macOS/Windows
+# build fine); this makes the Linux/manylinux build match.
+setuptools<81

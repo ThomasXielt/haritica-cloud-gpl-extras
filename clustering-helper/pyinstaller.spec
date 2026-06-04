@@ -93,6 +93,9 @@ a = Analysis(
         'leidenalg',
         'louvain',
         'igraph',
+        # louvain/__init__.py does `from pkg_resources import ...` at import
+        # time; force-bundle it so the frozen binary can import louvain.
+        'pkg_resources',
         'numpy',
         'pandas',
         'scipy',
