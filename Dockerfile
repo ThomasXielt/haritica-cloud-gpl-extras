@@ -75,7 +75,8 @@ RUN pip install --no-cache-dir \
       'numpy<2.0' \
       'pandas>=2.0,<3.0' \
       'scipy>=1.10' \
-      'anndata>=0.10,<0.11' \
+      'anndata>=0.12,<0.13' \
+      'h5py>=3.0' \
       'scanpy>=1.10,<2.0' \
       'leidenalg>=0.10,<0.11' \
       'louvain>=0.8,<0.9' \

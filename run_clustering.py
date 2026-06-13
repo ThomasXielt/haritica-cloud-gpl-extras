@@ -115,6 +115,75 @@ def _install_scoped_session() -> None:
     )
 
 
+def _load_embedding_h5py(h5ad_local: str, use_rep: str):
+    """Skew-proof minimal load: pull ONLY ``obsm[use_rep]`` + the obs index via
+    raw h5py and build a bare AnnData. Used as a fallback when a full
+    ``anndata.read_h5ad`` fails — most commonly an anndata version skew where
+    the (newer) writer encoded a ``None`` scalar (e.g. ``uns['log1p']['base']``)
+    with an IOSpec the (older) reader can't decode. The clustering runner needs
+    nothing from ``uns``/``var``/``layers``/``X``, so the embedding + index is
+    sufficient and is immune to writer/reader anndata version drift."""
+    import h5py
+    import numpy as np
+
+    with h5py.File(str(h5ad_local), "r") as f:
+        obsm_key = f"obsm/{use_rep}"
+        if obsm_key not in f:
+            print(
+                f"[run_clustering] ERROR: {use_rep!r} not found in obsm — run PCA "
+                "before clustering (the embedding must already exist in the h5ad)",
+                flush=True,
+            )
+            sys.exit(2)
+        pca = np.asarray(f[obsm_key][...])
+        obs = f["obs"]
+        idx_key = obs.attrs.get("_index", "_index")
+        if isinstance(idx_key, bytes):
+            idx_key = idx_key.decode()
+        if idx_key in obs:
+            raw_index = obs[idx_key][...]
+            index = [
+                x.decode() if isinstance(x, (bytes, bytearray)) else str(x)
+                for x in raw_index
+            ]
+        else:
+            # anndata always writes the index dataset; this branch is a last
+            # resort. A positional index will fail the stage-2 cell_index match
+            # (surfacing a clear error) rather than silently mislabel cells.
+            index = [str(i) for i in range(pca.shape[0])]
+
+    ad = anndata.AnnData(
+        X=np.zeros((pca.shape[0], 1), dtype="float32"),
+        obsm={use_rep: pca},
+    )
+    ad.obs_names = index
+    return ad
+
+
+def _load_embedding(h5ad_local: str, use_rep: str):
+    """Load the h5ad into an AnnData carrying the clustering embedding. Tries a
+    full ``anndata.read_h5ad`` first; on ANY read failure falls back to the
+    h5py-direct minimal load (version-skew-proof)."""
+    try:
+        ad = anndata.read_h5ad(str(h5ad_local))
+    except Exception as e:  # noqa: BLE001 — fall back on ANY read failure
+        print(
+            f"[run_clustering] full anndata read failed "
+            f"({type(e).__name__}: {e}); falling back to h5py-direct minimal "
+            f"load of obsm[{use_rep!r}] + obs index",
+            flush=True,
+        )
+        return _load_embedding_h5py(h5ad_local, use_rep)
+    if use_rep not in ad.obsm:
+        print(
+            f"[run_clustering] ERROR: {use_rep!r} missing from obsm — run PCA "
+            "before clustering.",
+            flush=True,
+        )
+        sys.exit(2)
+    return ad
+
+
 def main() -> int:
     _install_scoped_session()
     # NOTE: the sc-compute h5ad lives in S3_RESULTS_BUCKET, so the writer
@@ -133,10 +202,20 @@ def main() -> int:
     out_bucket, out_prefix = _parse_s3_uri(output_prefix_uri)
 
     method = tool_params.get("method", "leiden")
-    resolution = float(tool_params.get("resolution", 1.0))
+    if method not in ("leiden", "louvain"):
+        print(f"[run_clustering] ERROR: unknown clustering method '{method}' (expected leiden|louvain)")
+        return 2
     n_neighbors = int(tool_params.get("n_neighbors", 15))
     random_state = int(tool_params.get("random_state", 0))
     use_rep = tool_params.get("use_rep", "X_pca")
+
+    # Cluster at EVERY requested resolution so the stage-2 gallery shows distinct
+    # panels. Prefer the full `resolutions` list; fall back to the single
+    # `resolution` for back-compat with older callers.
+    resolutions = tool_params.get("resolutions")
+    if not resolutions:
+        resolutions = [float(tool_params.get("resolution", 1.0))]
+    resolutions = [float(r) for r in resolutions]
 
     work = Path(_env("HARITICA_WORK_DIR", "/mnt/nvme"))
     work.mkdir(parents=True, exist_ok=True)
@@ -147,28 +226,37 @@ def main() -> int:
     print(f"[run_clustering] downloading s3://{input_bucket}/{h5ad_key} -> {h5ad_local}")
     s3.download_file(input_bucket, h5ad_key, str(h5ad_local))
 
-    print(f"[run_clustering] reading h5ad ({h5ad_local})")
-    ad = anndata.read_h5ad(str(h5ad_local))
+    print(f"[run_clustering] loading embedding ({h5ad_local}, use_rep={use_rep})")
+    ad = _load_embedding(str(h5ad_local), use_rep)
 
     print(f"[run_clustering] computing neighbors (n_neighbors={n_neighbors}, use_rep={use_rep})")
     sc.pp.neighbors(ad, n_neighbors=n_neighbors, use_rep=use_rep)
 
-    if method == "leiden":
-        print(f"[run_clustering] running leiden (resolution={resolution}, random_state={random_state})")
-        sc.tl.leiden(ad, resolution=resolution, random_state=random_state, key_added="cluster")
-    elif method == "louvain":
-        print(f"[run_clustering] running louvain (resolution={resolution}, random_state={random_state})")
-        sc.tl.louvain(ad, resolution=resolution, random_state=random_state, key_added="cluster")
-    else:
-        print(f"[run_clustering] ERROR: unknown clustering method '{method}' (expected leiden|louvain)")
-        return 2
+    # Community detection is cheap once the kNN graph exists, so loop all
+    # resolutions on the one graph. Column `cluster_res{i}` per resolution index;
+    # the stage-2 gallery loop iterates the SAME ordered resolutions list and maps
+    # resolution i -> cluster_res{i}. `cluster` (== resolutions[0]) is kept for
+    # back-compat with single-resolution consumers.
+    cluster_fn = sc.tl.leiden if method == "leiden" else sc.tl.louvain
+    label_cols = []
+    for i, res in enumerate(resolutions):
+        col = f"cluster_res{i}"
+        print(
+            f"[run_clustering] running {method} "
+            f"(resolution={res}, idx={i}, random_state={random_state}) -> {col}"
+        )
+        cluster_fn(ad, resolution=res, random_state=random_state, key_added=col)
+        label_cols.append(col)
 
-    print(f"[run_clustering] writing labels CSV {labels_local}")
+    print(f"[run_clustering] writing labels CSV {labels_local} ({len(label_cols)} resolution(s))")
+    idx = ad.obs.index.astype(str).tolist()
+    cols_data = [ad.obs[c].astype(str).tolist() for c in label_cols]
+    first = cols_data[0]  # resolutions[0] -> back-compat `cluster`
     with open(labels_local, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["cell_index", "cluster"])
-        for idx, lbl in zip(ad.obs.index, ad.obs["cluster"].astype(str)):
-            w.writerow([idx, lbl])
+        w.writerow(["cell_index", "cluster"] + label_cols)
+        for row_i, cell in enumerate(idx):
+            w.writerow([cell, first[row_i]] + [cd[row_i] for cd in cols_data])
 
     label_key = f"{out_prefix.rstrip('/')}/cluster_labels.csv"
     print(f"[run_clustering] uploading -> s3://{out_bucket}/{label_key}")

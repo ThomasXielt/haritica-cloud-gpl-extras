@@ -254,8 +254,37 @@ def main() -> int:
 
     # ----- Resolve HISAT2 index -----
     index_key = tool_params.get("hisat2_index_key") or ""
+    index_keys = tool_params.get("hisat2_index_keys") or []
     index_prefix: str | None = None
-    if index_key and references_bucket:
+    idx_dir = work / "hisat2_index"
+
+    # Case A: explicit per-file keys for a CUSTOM user-uploaded index. Each
+    # .N.ht2 was uploaded under its own uploads/{uid}/{uuid}/ prefix (no shared
+    # directory), so we can't prefix-list them — download exactly the given keys
+    # from the INPUT bucket (the worker's session role already reads
+    # uploads/{user_id}/ for the FASTQ download). Then derive the basename.
+    if index_keys:
+        idx_dir.mkdir(exist_ok=True)
+        for k in index_keys:
+            if not (k.endswith(".ht2") or k.endswith(".ht2l")):
+                continue
+            local = idx_dir / Path(k).name
+            print(f"[run_alignment] downloading custom index s3://{input_bucket}/{k} -> {local}")
+            s3.download_file(input_bucket, k, str(local))
+        sample = next(idx_dir.glob("*.ht2"), None) or next(idx_dir.glob("*.ht2l"), None)
+        if sample:
+            base = sample.name
+            if ".ht2" in base:
+                base = base.rsplit(".", 2)[0]
+            index_prefix = str(idx_dir / base)
+        else:
+            print("[run_alignment] WARN: no .ht2 files among hisat2_index_keys")
+
+    # Case B: a bundled catalog genome (or a co-located custom prefix). Pick the
+    # bucket by key prefix: uploads/ -> INPUT bucket; genomes/ -> REFERENCES.
+    _index_is_upload = index_key.startswith("uploads/")
+    index_bucket = input_bucket if _index_is_upload else references_bucket
+    if index_prefix is None and index_key and index_bucket:
         # Index is a set of .ht2 files sharing a basename. The key may point at
         # the basename (e.g. "indexes/grcz11/genome") or any one .ht2 file.
         idx_dir = work / "hisat2_index"
@@ -265,14 +294,14 @@ def main() -> int:
         # Pull every sibling .ht2 file
         paginator = s3.get_paginator("list_objects_v2")
         downloaded_any = False
-        for page in paginator.paginate(Bucket=references_bucket, Prefix=list_prefix):
+        for page in paginator.paginate(Bucket=index_bucket, Prefix=list_prefix):
             for entry in page.get("Contents", []) or []:
                 k = entry["Key"]
                 if not (k.endswith(".ht2") or k.endswith(".ht2l")):
                     continue
                 local = idx_dir / Path(k).name
-                print(f"[run_alignment] downloading index s3://{references_bucket}/{k} -> {local}")
-                s3.download_file(references_bucket, k, str(local))
+                print(f"[run_alignment] downloading index s3://{index_bucket}/{k} -> {local}")
+                s3.download_file(index_bucket, k, str(local))
                 downloaded_any = True
         if downloaded_any:
             # Strip any .#.ht2 suffix to find the basename
@@ -284,7 +313,7 @@ def main() -> int:
                     base = base.rsplit(".", 2)[0]
                 index_prefix = str(idx_dir / base)
         else:
-            print(f"[run_alignment] WARN: no .ht2 files found under s3://{references_bucket}/{list_prefix}")
+            print(f"[run_alignment] WARN: no .ht2 files found under s3://{index_bucket}/{list_prefix}")
     if not index_prefix:
         print("[run_alignment] ERROR: HISAT2 index could not be resolved (set tool_params.hisat2_index_key + S3_REFERENCES_BUCKET)")
         return 2
